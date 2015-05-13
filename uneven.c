@@ -156,7 +156,7 @@ int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
     pa_context_unref(pa_ctx);
     pa_mainloop_free(pa_ml);
 
-    return done == 1 && pa_state != 2;
+    return done == 1;
 }
 
 int main(int argc, char *argv[]) {
