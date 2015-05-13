@@ -1,22 +1,9 @@
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <pulse/pulseaudio.h>
 
-// Field list is here: http://0pointer.de/lennart/projects/pulseaudio/doxygen/structpa__sink__info.html
-typedef struct pa_devicelist {
-    uint8_t initialized;
-    char name[512];
-    uint32_t index;
-    char description[256];
-} pa_devicelist_t;
-
-void pa_state_cb(pa_context *c, void *userdata);
-void pa_sinklist_cb(pa_context *c, const pa_sink_info *l, int eol, void *userdata);
-void pa_sourcelist_cb(pa_context *c, const pa_source_info *l, int eol, void *userdata);
-int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output);
-
-// This callback gets called when our context changes state.  We really only
-// care about when it's ready or if it has failed
 void pa_state_cb(pa_context *c, void *userdata) {
     pa_context_state_t state;
     int *pa_ready = userdata;
@@ -41,59 +28,24 @@ void pa_state_cb(pa_context *c, void *userdata) {
     }
 }
 
-// pa_mainloop will call this function when it's ready to tell us about a sink.
-// Since we're not threading, there's no need for mutexes on the devicelist
-// structure
-void pa_sinklist_cb(pa_context *c, const pa_sink_info *l, int eol, void *userdata) {
-    pa_devicelist_t *pa_devicelist = userdata;
-    int ctr = 0;
+void force_volume_cb(pa_context *c, pa_subscription_event_type_t t, uint32_t idx, void *userdata) {
+    int* state = userdata;
 
-    // If eol is set to a positive number, you're at the end of the list
-    if (eol > 0) {
-        return;
-    }
-
-    // We know we've allocated 16 slots to hold devices.  Loop through our
-    // structure and find the first one that's "uninitialized."  Copy the
-    // contents into it and we're done.  If we receive more than 16 devices,
-    // they're going to get dropped.  You could make this dynamically allocate
-    // space for the device list, but this is a simple example.
-    for (ctr = 0; ctr < 16; ctr++) {
-        if (! pa_devicelist[ctr].initialized) {
-            strncpy(pa_devicelist[ctr].name, l->name, 511);
-            strncpy(pa_devicelist[ctr].description, l->description, 255);
-            pa_devicelist[ctr].index = l->index;
-            pa_devicelist[ctr].initialized = 1;
-            break;
+    if ((t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SOURCE) {
+        if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_CHANGE) {
+            *state = 2;
         }
     }
 }
 
-// See above.  This callback is pretty much identical to the previous
-void pa_sourcelist_cb(pa_context *c, const pa_source_info *l, int eol, void *userdata) {
-    pa_devicelist_t *pa_devicelist = userdata;
-    int ctr = 0;
 
-    if (eol > 0) {
-        return;
-    }
+volatile sig_atomic_t done = -1;
 
-    for (ctr = 0; ctr < 16; ctr++) {
-        if (! pa_devicelist[ctr].initialized) {
-            strncpy(pa_devicelist[ctr].name, l->name, 511);
-            strncpy(pa_devicelist[ctr].description, l->description, 255);
-            pa_devicelist[ctr].index = l->index;
-            pa_devicelist[ctr].initialized = 1;
-            break;
-        }
-    }
+void cleanup_pa(int signum) {
+    done = 0;
 }
 
-int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
-    // Initialize our device lists
-    memset(input, 0, sizeof(pa_devicelist_t) * 16);
-    memset(output, 0, sizeof(pa_devicelist_t) * 16);
-
+int force_volume(char* source_name, pa_volume_t* desired_volume) {
     // Create a mainloop
     pa_mainloop* pa_ml = pa_mainloop_new();
     pa_mainloop_api* pa_mlapi = pa_mainloop_get_api(pa_ml);
@@ -106,11 +58,13 @@ int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
     int pa_state = 0;
     pa_context_set_state_callback(pa_ctx, pa_state_cb, &pa_state);
 
-    // Iterate PA mainloop until we're done or the context enters an error state
+    // Set up event subscription
     int state = 0;
-    int done = 0;
+    pa_context_set_subscribe_callback(pa_ctx, force_volume_cb, &state);
+
+    // Iterate PA mainloop until we're done or the context enters an error state
     pa_operation* pending_op = NULL;
-    while (done == 0 && pa_state != 2) {
+    while (done == -1 && pa_state != 2) {
         pa_mainloop_iterate(pa_ml, 1, NULL);
 
         // Can't do anything unless PA is ready
@@ -123,29 +77,20 @@ int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
                 }
                 switch (state) {
                     case 0:
-                        pending_op = pa_context_get_sink_info_list(
-                            pa_ctx,
-                            pa_sinklist_cb,
-                            output
-                        );
+                        pending_op = pa_context_subscribe(pa_ctx, PA_SUBSCRIPTION_MASK_SOURCE, NULL, NULL);
 
                         state++;
                         break;
                     case 1:
-                        pending_op = pa_context_get_source_info_list(
-                            pa_ctx,
-                            pa_sourcelist_cb,
-                            input
-                        );
-
-                        state++;
                         break;
                     case 2:
-                        done = 1;
+                        pending_op = pa_context_set_source_volume_by_name(pa_ctx, source_name, desired_volume, NULL, NULL);
+
+                        state--;
                         break;
                     default:
                         fprintf(stderr, "in state %d\n", state);
-                        done = -1;
+                        done = 2;
                 }
             }
         }
@@ -156,43 +101,22 @@ int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
     pa_context_unref(pa_ctx);
     pa_mainloop_free(pa_ml);
 
-    return done == 1;
+    return done;
 }
 
-int main(int argc, char *argv[]) {
-    int ctr;
-
-    // This is where we'll store the input device list
-    pa_devicelist_t pa_input_devicelist[16];
-
-    // This is where we'll store the output device list
-    pa_devicelist_t pa_output_devicelist[16];
-
-    if (pa_get_devicelist(pa_input_devicelist, pa_output_devicelist) < 0) {
-        fprintf(stderr, "failed to get device list\n");
-        return 1;
+int main(int argc, char* argv[]) {
+    pa_volume_t* volume = (pa_volume_t) (atoi(argv[1]) * (double) PA_VOLUME_NORM / 100);
+    if (!PA_VOLUME_IS_VALID(volume)) {
+        return 3;
     }
+    char* source_name = pa_xstrdup(argv[0]);
 
-    for (ctr = 0; ctr < 16; ctr++) {
-        if (! pa_output_devicelist[ctr].initialized) {
-            break;
-        }
-        printf("=======[ Output Device #%d ]=======\n", ctr+1);
-        printf("Description: %s\n", pa_output_devicelist[ctr].description);
-        printf("Name: %s\n", pa_output_devicelist[ctr].name);
-        printf("Index: %d\n", pa_output_devicelist[ctr].index);
-        printf("\n");
-    }
+    signal(SIGINT, cleanup_pa);
+    signal(SIGTERM, cleanup_pa);
 
-    for (ctr = 0; ctr < 16; ctr++) {
-        if (! pa_input_devicelist[ctr].initialized) {
-            break;
-        }
-        printf("=======[ Input Device #%d ]=======\n", ctr+1);
-        printf("Description: %s\n", pa_input_devicelist[ctr].description);
-        printf("Name: %s\n", pa_input_devicelist[ctr].name);
-        printf("Index: %d\n", pa_input_devicelist[ctr].index);
-        printf("\n");
-    }
-    return 0;
+    int retcode = force_volume(source_name, volume);
+
+    pa_xfree(source_name);
+
+    return retcode;
 }
