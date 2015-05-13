@@ -1,7 +1,13 @@
+CC = gcc
+CFLAGS = -O2 -Wall
+
 uneven: uneven.o
-	gcc -O2 -Wall -o uneven uneven.o -lpulse
+	$(CC) $(CFLAGS) -o uneven uneven.o -lpulse
+
+uneven.o:
+	$(CC) $(CFLAGS) -c uneven.c
 
 .PHONY: clean
 
 clean:
-	rm -f *.o uneven
+	$(RM) *.o uneven
