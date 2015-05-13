@@ -29,6 +29,7 @@ void pa_state_cb(pa_context *c, void *userdata) {
         case PA_CONTEXT_AUTHORIZING:
         case PA_CONTEXT_SETTING_NAME:
         default:
+            *pa_ready = 0;
             break;
         case PA_CONTEXT_FAILED:
         case PA_CONTEXT_TERMINATED:
@@ -89,108 +90,73 @@ void pa_sourcelist_cb(pa_context *c, const pa_source_info *l, int eol, void *use
 }
 
 int pa_get_devicelist(pa_devicelist_t *input, pa_devicelist_t *output) {
-    // Define our pulse audio loop and connection variables
-    pa_mainloop *pa_ml;
-    pa_mainloop_api *pa_mlapi;
-    pa_operation *pa_op;
-    pa_context *pa_ctx;
-
-
-    // We'll need these state variables to keep track of our requests
-    int state = 0;
-    int pa_ready = 0;
-
     // Initialize our device lists
     memset(input, 0, sizeof(pa_devicelist_t) * 16);
     memset(output, 0, sizeof(pa_devicelist_t) * 16);
 
-    // Create a mainloop API and connection to the default server
-    pa_ml = pa_mainloop_new();
-    pa_mlapi = pa_mainloop_get_api(pa_ml);
-    pa_ctx = pa_context_new(pa_mlapi, "test");
+    // Create a mainloop
+    pa_mainloop* pa_ml = pa_mainloop_new();
+    pa_mainloop_api* pa_mlapi = pa_mainloop_get_api(pa_ml);
 
-    // This function connects to the pulse server
+    // Establish PA context
+    pa_context* pa_ctx = pa_context_new(pa_mlapi, "uneven");
     pa_context_connect(pa_ctx, NULL, 0, NULL);
 
+    // Set up PA state callback
+    int pa_state = 0;
+    pa_context_set_state_callback(pa_ctx, pa_state_cb, &pa_state);
 
-    // This function defines a callback so the server will tell us it's state.
-    // Our callback will wait for the state to be ready.  The callback will
-    // modify the variable to 1 so we know when we have a connection and it's
-    // ready.
-    // If there's an error, the callback will set pa_ready to 2
-    pa_context_set_state_callback(pa_ctx, pa_state_cb, &pa_ready);
+    // Iterate PA mainloop until we're done or the context enters an error state
+    int state = 0;
+    int done = 0;
+    pa_operation* pending_op = NULL;
+    while (done == 0 && pa_state != 2) {
+        pa_mainloop_iterate(pa_ml, 1, NULL);
 
-    // Now we'll enter into an infinite loop until we get the data we receive
-    // or if there's an error
-    for (;;) {
-        // We can't do anything until PA is ready, so just iterate the mainloop
-        // and continue
-        if (pa_ready == 0) {
-            pa_mainloop_iterate(pa_ml, 1, NULL);
-            continue;
-        }
-        // We couldn't get a connection to the server, so exit out
-        if (pa_ready == 2) {
-            pa_context_disconnect(pa_ctx);
-            pa_context_unref(pa_ctx);
-            pa_mainloop_free(pa_ml);
-            return -1;
-        }
-        // At this point, we're connected to the server and ready to make
-        // requests
-        switch (state) {
-            // State 0: we haven't done anything yet
-            case 0:
-                // This sends an operation to the server.  pa_sinklist_info is
-                // our callback function and a pointer to our devicelist will
-                // be passed to the callback The operation ID is stored in the
-                // pa_op variable
-                pa_op = pa_context_get_sink_info_list(pa_ctx,
-                        pa_sinklist_cb,
-                        output
+        // Can't do anything unless PA is ready
+        if (pa_state == 1) {
+            // Wait for any pending operation to complete
+            if (!pending_op || (pending_op && pa_operation_get_state(pending_op) == PA_OPERATION_DONE)) {
+                if (pending_op) {
+                    pa_operation_unref(pending_op);
+                    pending_op = NULL;
+                }
+                switch (state) {
+                    case 0:
+                        pending_op = pa_context_get_sink_info_list(
+                            pa_ctx,
+                            pa_sinklist_cb,
+                            output
                         );
 
-                // Update state for next iteration through the loop
-                state++;
-                break;
-            case 1:
-                // Now we wait for our operation to complete.  When it's
-                // complete our pa_output_devicelist is filled out, and we move
-                // along to the next state
-                if (pa_operation_get_state(pa_op) == PA_OPERATION_DONE) {
-                    pa_operation_unref(pa_op);
-
-                    // Now we perform another operation to get the source
-                    // (input device) list just like before.  This time we pass
-                    // a pointer to our input structure
-                    pa_op = pa_context_get_source_info_list(pa_ctx,
+                        state++;
+                        break;
+                    case 1:
+                        pending_op = pa_context_get_source_info_list(
+                            pa_ctx,
                             pa_sourcelist_cb,
                             input
-                            );
-                    // Update the state so we know what to do next
-                    state++;
+                        );
+
+                        state++;
+                        break;
+                    case 2:
+                        done = 1;
+                        break;
+                    default:
+                        fprintf(stderr, "in state %d\n", state);
+                        done = -1;
                 }
-                break;
-            case 2:
-                if (pa_operation_get_state(pa_op) == PA_OPERATION_DONE) {
-                    // Now we're done, clean up and disconnect and return
-                    pa_operation_unref(pa_op);
-                    pa_context_disconnect(pa_ctx);
-                    pa_context_unref(pa_ctx);
-                    pa_mainloop_free(pa_ml);
-                    return 0;
-                }
-                break;
-            default:
-                // We should never see this state
-                fprintf(stderr, "in state %d\n", state);
-                return -1;
+            }
         }
-        // Iterate the main loop and go again.  The second argument is whether
-        // or not the iteration should block until something is ready to be
-        // done.  Set it to zero for non-blocking.
-        pa_mainloop_iterate(pa_ml, 1, NULL);
     }
+
+    // Clean up
+    pa_context_disconnect(pa_ctx);
+    pa_context_unref(pa_ctx);
+    pa_mainloop_free(pa_ml);
+
+    return done == 1 && pa_state != 2;
 }
 
 int main(int argc, char *argv[]) {
