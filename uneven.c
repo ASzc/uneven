@@ -78,7 +78,7 @@ int force_volume(char* source_name, pa_volume_t desired_volume) {
 
     // Prepare loop variables
     pa_operation* pending_op = NULL;
-    pa_cvolume current_volume = {0, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
+    pa_cvolume current_volume = {0, {0}};
     int do_update;
     int i;
 
