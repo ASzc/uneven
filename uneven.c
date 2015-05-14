@@ -10,7 +10,6 @@ void pa_state_cb(pa_context *c, void *userdata) {
 
     state = pa_context_get_state(c);
     switch  (state) {
-        // There are just here for reference
         case PA_CONTEXT_UNCONNECTED:
         case PA_CONTEXT_CONNECTING:
         case PA_CONTEXT_AUTHORIZING:
@@ -38,6 +37,11 @@ void force_volume_cb(pa_context *c, pa_subscription_event_type_t t, uint32_t idx
     }
 }
 
+void get_volume_cb(pa_context *c, const pa_source_info *i, int eol, void *userdata) {
+    pa_cvolume* volume = userdata;
+
+    *volume = i->volume;
+}
 
 volatile sig_atomic_t done = -1;
 
@@ -45,7 +49,7 @@ void cleanup_pa(int signum) {
     done = 0;
 }
 
-int force_volume(char* source_name, pa_volume_t* desired_volume) {
+int force_volume(char* source_name, double desired_volume) {
     // Create a mainloop
     pa_mainloop* pa_ml = pa_mainloop_new();
     pa_mainloop_api* pa_mlapi = pa_mainloop_get_api(pa_ml);
@@ -63,6 +67,7 @@ int force_volume(char* source_name, pa_volume_t* desired_volume) {
     pa_context_set_subscribe_callback(pa_ctx, force_volume_cb, &state);
 
     // Iterate PA mainloop until we're done or the context enters an error state
+    pa_cvolume* current_volume = NULL;
     pa_operation* pending_op = NULL;
     while (done == -1 && pa_state != 2) {
         pa_mainloop_iterate(pa_ml, 1, NULL);
@@ -77,16 +82,35 @@ int force_volume(char* source_name, pa_volume_t* desired_volume) {
                 }
                 switch (state) {
                     case 0:
+                        // Subscribe to source events
                         pending_op = pa_context_subscribe(pa_ctx, PA_SUBSCRIPTION_MASK_SOURCE, NULL, NULL);
 
                         state++;
                         break;
                     case 1:
+                        // Idle
                         break;
                     case 2:
-                        pending_op = pa_context_set_source_volume_by_name(pa_ctx, source_name, desired_volume, NULL, NULL);
+                        // Source change detected, retrive volume information
+                        pending_op = pa_context_get_source_info_by_name(pa_ctx, source_name, get_volume_cb, current_volume);
 
-                        state--;
+                        state++;
+                        break;
+                    case 3:
+                        // Check channel volumes and reset if required
+                        int do_update = 0;
+                        for (int i = 0; i < current_volume->channels; i++) {
+                            if (current_volume->values[i] != desired_volume) {
+                                do_update = 1;
+                                current_volume->values[i] = desired_volume;
+                            }
+                        }
+
+                        if (do_update) {
+                            pending_op = pa_context_set_source_volume_by_name(pa_ctx, source_name, current_volume, NULL, NULL);
+                        }
+
+                        state = 1;
                         break;
                     default:
                         fprintf(stderr, "in state %d\n", state);
@@ -105,8 +129,8 @@ int force_volume(char* source_name, pa_volume_t* desired_volume) {
 }
 
 int main(int argc, char* argv[]) {
-    pa_volume_t* volume = (pa_volume_t) (atoi(argv[1]) * (double) PA_VOLUME_NORM / 100);
-    if (!PA_VOLUME_IS_VALID(volume)) {
+    double volume = atoi(argv[1]) * (double) PA_VOLUME_NORM / 100;
+    if (!PA_VOLUME_IS_VALID((pa_volume_t) volume)) {
         return 3;
     }
     char* source_name = pa_xstrdup(argv[0]);
