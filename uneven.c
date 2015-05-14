@@ -45,10 +45,16 @@ void get_volume_cb(pa_context *c, const pa_source_info *i, int eol, void *userda
         fprintf(stderr, "Failed to get source information: %s\n", pa_strerror(pa_context_errno(c)));
     }
 
-    printf("name: %s, #chan: %d, level0: %u, level1: %u\n", i->name, i->volume.channels, i->volume.values[0], i->volume.values[1]);
+    if (!eol) {
+        printf("name: %s, #chan: %d, level0: %u, level1: %u\n", i->name, i->volume.channels, i->volume.values[0], i->volume.values[1]);
 
-    *volume = i->volume;
-    printf("fetched volume ok\n");
+        volume->channels = i->volume.channels;
+        int j;
+        for (j = 0; j < volume->channels; j++) {
+            volume->values[j] = i->volume.values[j];
+        }
+        printf("fetched volume ok\n");
+    }
 }
 
 volatile sig_atomic_t done = -1;
@@ -75,7 +81,8 @@ int force_volume(char* source_name, pa_volume_t desired_volume) {
     pa_context_set_subscribe_callback(pa_ctx, source_state_cb, &state);
 
     // Iterate PA mainloop until we're done or the context enters an error state
-    pa_cvolume* current_volume = NULL;
+    pa_volume_t _v[PA_CHANNELS_MAX] = {0U};
+    pa_cvolume current_volume = {0, _v};
     pa_operation* pending_op = NULL;
     int do_update = 0;
     int i;
@@ -107,7 +114,7 @@ int force_volume(char* source_name, pa_volume_t desired_volume) {
                         printf(">> 2\n");
                         printf("%s\n", source_name);
                         // Source change detected, retrive volume information
-                        pending_op = pa_context_get_source_info_by_name(pa_ctx, source_name, get_volume_cb, current_volume);
+                        pending_op = pa_context_get_source_info_by_name(pa_ctx, source_name, get_volume_cb, &current_volume);
 
                         state++;
                         break;
@@ -115,15 +122,15 @@ int force_volume(char* source_name, pa_volume_t desired_volume) {
                         printf(">> 3\n");
                         // Check channel volumes and reset if required
                         do_update = 0;
-                        for (i = 0; i < current_volume->channels; i++) {
-                            if (current_volume->values[i] != desired_volume) {
+                        for (i = 0; i < current_volume.channels; i++) {
+                            if (current_volume.values[i] != desired_volume) {
                                 do_update = 1;
-                                current_volume->values[i] = desired_volume;
+                                current_volume.values[i] = desired_volume;
                             }
                         }
 
                         if (do_update) {
-                            pending_op = pa_context_set_source_volume_by_name(pa_ctx, source_name, current_volume, NULL, NULL);
+                            pending_op = pa_context_set_source_volume_by_name(pa_ctx, source_name, &current_volume, NULL, NULL);
                         }
 
                         state = 1;
