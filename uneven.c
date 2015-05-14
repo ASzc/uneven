@@ -76,12 +76,13 @@ int force_volume(char* source_name, pa_volume_t desired_volume) {
     int state = 0;
     pa_context_set_subscribe_callback(pa_ctx, source_state_cb, &state);
 
-    // Iterate PA mainloop until we're done or the context enters an error state
-    pa_volume_t _v[PA_CHANNELS_MAX] = {0U};
-    pa_cvolume current_volume = {0, *_v};
+    // Prepare loop variables
     pa_operation* pending_op = NULL;
+    pa_cvolume current_volume = {0, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
     int do_update;
     int i;
+
+    // Iterate PA mainloop until we're done or the context enters an error state
     while (done == -1 && pa_state != 2) {
         pa_mainloop_iterate(pa_ml, 1, NULL);
 
