@@ -1,4 +1,4 @@
-# Uneven
+# Uneven - Microphone volume unleveler
 
 Uneven will efficently enforce a constant microphone volume level, to counter annoying volume "leveling" adjustments performed by e.g. BlueJeans.
 
