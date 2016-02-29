@@ -9,7 +9,7 @@ Source0: https://github.com/ASzc/uneven/archive/uneven-%{version}.tar.gz
 BuildRequires: pulseaudio-libs-devel >= 3.0
 
 %description
-Uneven will efficently enforce a constant microphone volume level, to counter
+Uneven will efficiently enforce a constant microphone volume level, to counter
 annoying volume "leveling" adjustments performed by e.g. BlueJeans.
 
 %prep

@@ -1,6 +1,6 @@
 # Uneven - Microphone volume unleveler
 
-Uneven will efficently enforce a constant microphone volume level, to counter annoying volume "leveling" adjustments performed by e.g. BlueJeans.
+Uneven will efficiently enforce a constant microphone volume level, to counter annoying volume "leveling" adjustments performed by e.g. BlueJeans.
 
 ## Usage
 
@@ -25,7 +25,7 @@ The "Description" field is often the name displayed in GUIs, and the "Name" fiel
     dnf copr enable aszczucz/uneven
     dnf install -y uneven
 
-## CentOS
+### CentOS
 
     curl -o /etc/yum.repos.d/_copr_aszczucz-uneven.repo https://copr.fedorainfracloud.org/coprs/aszczucz/uneven/repo/epel-7/aszczucz-uneven-epel-7.repo
     yum install -y uneven
